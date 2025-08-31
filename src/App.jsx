@@ -52,12 +52,8 @@ function App() {
   };
 
   useEffect(() => {
-    const socketUrl = import.meta.env.PROD
-      ? import.meta.env.VITE_BACKEND_URL ||
-        `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${
-          window.location.host
-        }`
-      : "http://localhost:3001";
+    const socketUrl =
+      import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 
     const newSocket = io(socketUrl, {
       reconnection: true,
