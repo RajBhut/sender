@@ -2,6 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
+// Icons (using simple text/symbols for now, can be replaced with icon library)
+const SunIcon = () => "☀️";
+const MoonIcon = () => "🌙";
+const ShareIcon = () => "📤";
+const FileIcon = () => "📄";
+const FolderIcon = () => "📁";
+const DownloadIcon = () => "⬇️";
+const CopyIcon = () => "📋";
+
 function App() {
   const [socket, setSocket] = useState(null);
   const [roomId, setRoomId] = useState("");
@@ -9,19 +18,36 @@ function App() {
   const [isHost, setIsHost] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [file, setFile] = useState(null);
+  const [folderFiles, setFolderFiles] = useState([]);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [receivedFile, setReceivedFile] = useState(null);
   const [receivedFileName, setReceivedFileName] = useState("");
   const [isReceiving, setIsReceiving] = useState(false);
   const [receivedProgress, setReceivedProgress] = useState(0);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+  const [dragOver, setDragOver] = useState(false);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [totalFiles, setTotalFiles] = useState(0);
+  
   const peerConnectionRef = useRef(null);
   const dataChannelRef = useRef(null);
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
   const receivedChunksRef = useRef([]);
   const fileSizeRef = useRef(0);
   const fileNameRef = useRef("");
   const isReceivingRef = useRef(false);
+
+  // Theme handling
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  };
 
   useEffect(() => {
     const socketUrl = import.meta.env.PROD
@@ -277,7 +303,7 @@ function App() {
             receivedChunksRef.current = [];
             fileSizeRef.current = metadata.size;
             fileNameRef.current = metadata.name;
-            setStatus(`Receiving file: ${metadata.name}`);
+            setStatus(`Receiving file: ${metadata.name}${metadata.totalFiles > 1 ? ` (${metadata.fileIndex}/${metadata.totalFiles})` : ''}`);
           }
         } catch (e) {
           console.error("Error parsing metadata:", e);
@@ -324,48 +350,127 @@ function App() {
     }
   };
 
+  // File/Folder handling functions
   const handleFileSelect = (event) => {
     const selectedFile = event.target.files[0];
     if (selectedFile) {
       setFile(selectedFile);
+      setFolderFiles([]);
     }
   };
 
-  const sendFile = () => {
-    if (!file || !dataChannelRef.current || !isConnected) {
-      console.error(
-        "Cannot send file: missing file, data channel, or not connected"
-      );
+  const handleFolderSelect = async (event) => {
+    const files = Array.from(event.target.files);
+    if (files.length > 0) {
+      setFolderFiles(files);
+      setFile(null);
+      setTotalFiles(files.length);
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    
+    const items = e.dataTransfer.items;
+    const files = [];
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        files.push(file);
+      }
+    }
+    
+    if (files.length === 1) {
+      setFile(files[0]);
+      setFolderFiles([]);
+    } else if (files.length > 1) {
+      setFolderFiles(files);
+      setFile(null);
+      setTotalFiles(files.length);
+    }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const getFileExtension = (filename) => {
+    return filename.split('.').pop().toUpperCase();
+  };
+
+  const sendFiles = async () => {
+    const filesToSend = folderFiles.length > 0 ? folderFiles : [file];
+    if (filesToSend.length === 0 || !dataChannelRef.current || !isConnected) {
+      console.error("Cannot send files: missing files, data channel, or not connected");
       return;
     }
 
-    // Reset progress
     setProgress(0);
-    setStatus("Preparing to send file...");
+    setStatus("Preparing to send files...");
 
-    // First send file metadata
-    const metadata = {
-      type: "file-metadata",
-      name: file.name,
-      size: file.size,
-    };
+    for (let i = 0; i < filesToSend.length; i++) {
+      const currentFile = filesToSend[i];
+      setCurrentFileIndex(i + 1);
+      
+      // Send file metadata
+      const metadata = {
+        type: "file-metadata",
+        name: currentFile.name,
+        size: currentFile.size,
+        fileIndex: i + 1,
+        totalFiles: filesToSend.length,
+      };
 
-    try {
-      dataChannelRef.current.send(JSON.stringify(metadata));
-      setStatus("Metadata sent, preparing file chunks...");
-    } catch (error) {
-      console.error("Error sending metadata:", error);
-      setStatus("Error sending file metadata!");
-      return;
+      try {
+        dataChannelRef.current.send(JSON.stringify(metadata));
+        setStatus(`Sending file ${i + 1}/${filesToSend.length}: ${currentFile.name}`);
+      } catch (error) {
+        console.error("Error sending metadata:", error);
+        setStatus("Error sending file metadata!");
+        return;
+      }
+
+      // Wait a bit before sending file chunks
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      await sendSingleFile(currentFile, i + 1, filesToSend.length);
+      
+      // Wait between files
+      if (i < filesToSend.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
+    
+    setStatus("All files sent successfully!");
+    setProgress(100);
+  };
 
-    // Add a small delay to ensure metadata is processed before sending chunks
-    setTimeout(() => {
+  const sendSingleFile = (fileToSend, fileIndex, totalFiles) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
 
       reader.onerror = (error) => {
         console.error("Error reading file:", error);
         setStatus("Error reading file!");
+        reject(error);
       };
 
       reader.onload = (e) => {
@@ -374,14 +479,10 @@ function App() {
         const totalChunks = Math.ceil(data.byteLength / chunkSize);
         let sentChunks = 0;
 
-        console.log(`Starting to send file in ${totalChunks} chunks`);
-        setStatus(`Sending file: ${file.name} (0/${totalChunks} chunks)`);
-
         const sendChunk = (start) => {
           if (start >= data.byteLength) {
-            console.log("File sent completely");
-            setStatus("File sent successfully!");
-            setProgress(100);
+            console.log(`File ${fileIndex}/${totalFiles} sent completely`);
+            resolve();
             return;
           }
 
@@ -389,25 +490,23 @@ function App() {
             const chunk = data.slice(start, start + chunkSize);
             dataChannelRef.current.send(chunk);
             sentChunks++;
-            const currentProgress = (sentChunks / totalChunks) * 100;
-            setProgress(currentProgress);
-            setStatus(
-              `Sending file: ${file.name} (${sentChunks}/${totalChunks} chunks)`
-            );
+            const fileProgress = (sentChunks / totalChunks) * 100;
+            const overallProgress = ((fileIndex - 1) / totalFiles) * 100 + (fileProgress / totalFiles);
+            setProgress(overallProgress);
 
-            // Use a small delay to prevent overwhelming the data channel
             setTimeout(() => sendChunk(start + chunkSize), 50);
           } catch (error) {
             console.error("Error sending chunk:", error);
             setStatus("Error sending file chunk!");
+            reject(error);
           }
         };
 
         sendChunk(0);
       };
 
-      reader.readAsArrayBuffer(file);
-    }, 500); // 500ms delay to ensure metadata is processed
+      reader.readAsArrayBuffer(fileToSend);
+    });
   };
 
   const downloadReceivedFile = () => {
@@ -451,99 +550,271 @@ function App() {
 
   const resetFileTransfer = () => {
     setFile(null);
+    setFolderFiles([]);
     setProgress(0);
     setReceivedFile(null);
     setReceivedFileName("");
     setIsReceiving(false);
     setReceivedProgress(0);
+    setCurrentFileIndex(0);
+    setTotalFiles(0);
     receivedChunksRef.current = [];
     fileSizeRef.current = 0;
     fileNameRef.current = "";
+    isReceivingRef.current = false;
     setStatus("File transfer reset");
   };
 
   return (
     <div className="app">
-      <h1>P2P File Sharing</h1>
-
-      {!roomId ? (
-        <div className="room-creation">
-          <button onClick={createRoom}>Create Room</button>
-          <div className="join-room">
-            <input
-              type="text"
-              value={inputRoomId}
-              onChange={(e) => setInputRoomId(e.target.value)}
-              placeholder="Enter Room ID"
-            />
-            <button onClick={joinRoom}>Join Room</button>
+      {/* Header */}
+      <header className="app-header">
+        <div className="app-title">
+          <div className="app-icon">
+            <ShareIcon />
           </div>
+          <h1>QuickShare</h1>
         </div>
-      ) : (
-        <div className="room-info">
-          <div className="room-id-container">
-            <h2 style={{ color: "black" }}>Room ID: {roomId}</h2>
-            <button className="copy-button" onClick={copyRoomId}>
-              Copy Room ID
-            </button>
-          </div>
-          <p>Status: {status}</p>
+        <button className="theme-toggle" onClick={toggleTheme}>
+          {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+        </button>
+      </header>
 
-          {isConnected && (
-            <div className="file-sharing">
-              <input
-                type="file"
-                onChange={handleFileSelect}
-                ref={fileInputRef}
-                style={{ display: "none" }}
-              />
-              <button onClick={() => fileInputRef.current.click()}>
-                Select File
+      {/* Main Container */}
+      <div className="main-container slide-in">
+        {!roomId ? (
+          <div className="room-creation">
+            <h2>Start Sharing</h2>
+            <p>Create a room to share files securely with peer-to-peer connection</p>
+            
+            <div className="button-group">
+              <button className="btn btn-primary" onClick={createRoom}>
+                <ShareIcon /> Create Room
               </button>
+            </div>
+            
+            <div className="input-group">
+              <input
+                type="text"
+                className="input"
+                value={inputRoomId}
+                onChange={(e) => setInputRoomId(e.target.value)}
+                placeholder="Enter Room ID to join"
+              />
+              <button className="btn btn-secondary" onClick={joinRoom}>
+                Join Room
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="room-info">
+            <div className="room-header">
+              <div className="room-id-container">
+                <div className="room-id">#{roomId}</div>
+                <button className="btn btn-secondary" onClick={copyRoomId}>
+                  <CopyIcon /> Copy ID
+                </button>
+              </div>
+              <div className={`status ${isConnected ? 'connected' : (status.includes('Connecting') ? 'connecting' : 'disconnected')}`}>
+                <span className="status-dot"></span>
+                {status}
+              </div>
+            </div>
 
-              {file && (
-                <div className="file-info">
-                  <p>Selected file: {file.name}</p>
-                  <button onClick={sendFile}>Send File</button>
-                  {progress > 0 && (
-                    <div className="progress-bar">
-                      <div
-                        className="progress"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {isReceiving && (
-                <div className="file-info receiving">
-                  <p>Receiving file: {fileNameRef.current}</p>
-                  <div className="progress-bar">
-                    <div
-                      className="progress"
-                      style={{ width: `${receivedProgress}%` }}
-                    />
+            {isConnected && (
+              <div className="file-sharing">
+                {/* File Drop Zone */}
+                <div 
+                  className={`file-drop-zone ${dragOver ? 'drag-over' : ''}`}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <div className="drop-icon">
+                    <FileIcon />
+                  </div>
+                  <h3>Drop files here or click to select</h3>
+                  <p>Support for single files and multiple files</p>
+                  
+                  <div className="button-group" style={{ marginTop: '1rem' }}>
+                    <button 
+                      className="btn btn-primary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      <FileIcon /> Select Files
+                    </button>
+                    <button 
+                      className="btn btn-secondary"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        folderInputRef.current?.click();
+                      }}
+                    >
+                      <FolderIcon /> Select Folder
+                    </button>
                   </div>
                 </div>
-              )}
 
-              {receivedFile && (
-                <div className="file-info received">
-                  <p>File received: {receivedFileName}</p>
-                  <button onClick={downloadReceivedFile}>Download File</button>
-                </div>
-              )}
+                {/* Hidden file inputs */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  style={{ display: "none" }}
+                  multiple
+                />
+                <input
+                  type="file"
+                  ref={folderInputRef}
+                  onChange={handleFolderSelect}
+                  style={{ display: "none" }}
+                  webkitdirectory=""
+                  multiple
+                />
 
-              {(file || isReceiving || receivedFile) && (
-                <button className="reset-button" onClick={resetFileTransfer}>
-                  Reset File Transfer
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                {/* Selected Files Display */}
+                {(file || folderFiles.length > 0) && (
+                  <div className={`file-item ${progress > 0 && progress < 100 ? 'sending' : (progress === 100 ? 'completed' : '')}`}>
+                    <div className="file-header">
+                      <div className="file-info-content">
+                        <div className="file-icon">
+                          {folderFiles.length > 0 ? <FolderIcon /> : getFileExtension(file?.name || '')}
+                        </div>
+                        <div className="file-details">
+                          <h4>
+                            {folderFiles.length > 0 
+                              ? `${folderFiles.length} files selected`
+                              : file?.name
+                            }
+                          </h4>
+                          <p>
+                            {folderFiles.length > 0 
+                              ? formatFileSize(folderFiles.reduce((total, f) => total + f.size, 0))
+                              : formatFileSize(file?.size || 0)
+                            }
+                          </p>
+                        </div>
+                      </div>
+                      <button 
+                        className="btn btn-success" 
+                        onClick={sendFiles}
+                        disabled={progress > 0 && progress < 100}
+                      >
+                        <ShareIcon /> Send
+                      </button>
+                    </div>
+
+                    {progress > 0 && (
+                      <div className="progress-container">
+                        <div className="progress-label">
+                          <span>
+                            {folderFiles.length > 0 && currentFileIndex > 0
+                              ? `Sending file ${currentFileIndex}/${totalFiles}`
+                              : 'Sending...'
+                            }
+                          </span>
+                          <span>{Math.round(progress)}%</span>
+                        </div>
+                        <div className="progress-bar">
+                          <div 
+                            className={`progress ${progress === 100 ? 'success' : ''}`}
+                            style={{ width: `${progress}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
+
+                    {folderFiles.length > 0 && (
+                      <div className="folder-container">
+                        <h5>Files in folder:</h5>
+                        {folderFiles.slice(0, 5).map((f, index) => (
+                          <div key={index} className="folder-item">
+                            <div className="folder-icon">
+                              {getFileExtension(f.name)}
+                            </div>
+                            <span>{f.name}</span>
+                            <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              {formatFileSize(f.size)}
+                            </span>
+                          </div>
+                        ))}
+                        {folderFiles.length > 5 && (
+                          <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                            ... and {folderFiles.length - 5} more files
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Receiving Files Display */}
+                {isReceiving && (
+                  <div className="file-item receiving">
+                    <div className="file-header">
+                      <div className="file-info-content">
+                        <div className="file-icon">
+                          {getFileExtension(fileNameRef.current)}
+                        </div>
+                        <div className="file-details">
+                          <h4>Receiving: {fileNameRef.current}</h4>
+                          <p>{formatFileSize(fileSizeRef.current)}</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="progress-container">
+                      <div className="progress-label">
+                        <span>Receiving...</span>
+                        <span>{Math.round(receivedProgress)}%</span>
+                      </div>
+                      <div className="progress-bar">
+                        <div 
+                          className="progress warning"
+                          style={{ width: `${receivedProgress}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Received Files Display */}
+                {receivedFile && (
+                  <div className="file-item completed">
+                    <div className="file-header">
+                      <div className="file-info-content">
+                        <div className="file-icon">
+                          {getFileExtension(receivedFileName)}
+                        </div>
+                        <div className="file-details">
+                          <h4>{receivedFileName}</h4>
+                          <p>{formatFileSize(receivedFile.size)} • Received successfully</p>
+                        </div>
+                      </div>
+                      <button className="btn btn-success" onClick={downloadReceivedFile}>
+                        <DownloadIcon /> Download
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Reset Button */}
+                {(file || folderFiles.length > 0 || isReceiving || receivedFile) && (
+                  <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+                    <button className="btn btn-danger" onClick={resetFileTransfer}>
+                      Reset Transfer
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
