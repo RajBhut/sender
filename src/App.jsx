@@ -2,14 +2,24 @@ import { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
-// Icons (using simple text/symbols for now, can be replaced with icon library)
-const SunIcon = () => "☀️";
-const MoonIcon = () => "🌙";
-const ShareIcon = () => "📤";
-const FileIcon = () => "📄";
-const FolderIcon = () => "📁";
-const DownloadIcon = () => "⬇️";
-const CopyIcon = () => "📋";
+// Import Lucide React icons
+import {
+  Sun,
+  Moon,
+  Share2,
+  File,
+  FolderOpen,
+  Download,
+  Copy,
+  Upload,
+  Users,
+  Wifi,
+  WifiOff,
+  RotateCcw,
+  CheckCircle,
+  AlertCircle,
+  X,
+} from "lucide-react";
 
 function App() {
   const [socket, setSocket] = useState(null);
@@ -21,8 +31,7 @@ function App() {
   const [folderFiles, setFolderFiles] = useState([]);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
-  const [receivedFile, setReceivedFile] = useState(null);
-  const [receivedFileName, setReceivedFileName] = useState("");
+  const [receivedFiles, setReceivedFiles] = useState([]);
   const [isReceiving, setIsReceiving] = useState(false);
   const [receivedProgress, setReceivedProgress] = useState(0);
   const [theme, setTheme] = useState(
@@ -325,8 +334,16 @@ function App() {
           if (receivedChunksRef.current.length >= totalChunks) {
             try {
               const blob = new Blob(receivedChunksRef.current);
-              setReceivedFile(blob);
-              setReceivedFileName(fileNameRef.current);
+              // Add to received files array instead of replacing
+              setReceivedFiles((prev) => [
+                ...prev,
+                {
+                  blob: blob,
+                  name: fileNameRef.current,
+                  size: blob.size,
+                  receivedAt: new Date(),
+                },
+              ]);
               setIsReceiving(false);
               isReceivingRef.current = false;
               setReceivedProgress(100);
@@ -518,27 +535,25 @@ function App() {
     });
   };
 
-  const downloadReceivedFile = () => {
-    if (!receivedFile) return;
+  const downloadFile = (file) => {
+    if (!file) return;
 
-    // Verify file size matches what was expected
-    if (receivedFile.size !== fileSizeRef.current) {
-      console.warn(
-        `File size mismatch: expected ${fileSizeRef.current} bytes, got ${receivedFile.size} bytes`
-      );
-      setStatus("Warning: File size mismatch. The file may be corrupted.");
-    } else {
-      console.log(`File size verified: ${receivedFile.size} bytes`);
-    }
+    console.log(`Downloading file: ${file.name}, size: ${file.size} bytes`);
 
-    const url = URL.createObjectURL(receivedFile);
+    const url = URL.createObjectURL(file.blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = receivedFileName;
+    a.download = file.name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadAllFiles = () => {
+    receivedFiles.forEach((file, index) => {
+      setTimeout(() => downloadFile(file), index * 100);
+    });
   };
 
   const copyRoomId = () => {
@@ -561,8 +576,7 @@ function App() {
     setFile(null);
     setFolderFiles([]);
     setProgress(0);
-    setReceivedFile(null);
-    setReceivedFileName("");
+    setReceivedFiles([]);
     setIsReceiving(false);
     setReceivedProgress(0);
     setCurrentFileIndex(0);
@@ -579,13 +593,14 @@ function App() {
       {/* Header */}
       <header className="app-header">
         <div className="app-title">
-          <div className="app-icon">
-            <ShareIcon />
-          </div>
-          <h1>QuickShare</h1>
+          <h1>Sender</h1>
         </div>
-        <button className="theme-toggle" onClick={toggleTheme}>
-          {theme === "light" ? <MoonIcon /> : <SunIcon />}
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+        >
+          {theme === "light" ? <Moon size={20} /> : <Sun size={20} />}
         </button>
       </header>
 
@@ -600,7 +615,7 @@ function App() {
 
             <div className="button-group">
               <button className="btn btn-primary" onClick={createRoom}>
-                <ShareIcon /> Create Room
+                <Share2 size={18} /> Create Room
               </button>
             </div>
 
@@ -623,7 +638,7 @@ function App() {
               <div className="room-id-container">
                 <div className="room-id">#{roomId}</div>
                 <button className="btn btn-secondary" onClick={copyRoomId}>
-                  <CopyIcon /> Copy ID
+                  <Copy size={16} /> Copy ID
                 </button>
               </div>
               <div
@@ -635,7 +650,13 @@ function App() {
                     : "disconnected"
                 }`}
               >
-                <span className="status-dot"></span>
+                {isConnected ? (
+                  <Wifi size={16} />
+                ) : status.includes("Connecting") ? (
+                  <AlertCircle size={16} />
+                ) : (
+                  <WifiOff size={16} />
+                )}
                 {status}
               </div>
             </div>
@@ -651,7 +672,7 @@ function App() {
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <div className="drop-icon">
-                    <FileIcon />
+                    <Upload size={48} />
                   </div>
                   <h3>Drop files here or click to select</h3>
                   <p>Support for single files and multiple files</p>
@@ -664,7 +685,7 @@ function App() {
                         fileInputRef.current?.click();
                       }}
                     >
-                      <FileIcon /> Select Files
+                      <File size={16} /> Select Files
                     </button>
                     <button
                       className="btn btn-secondary"
@@ -673,7 +694,7 @@ function App() {
                         folderInputRef.current?.click();
                       }}
                     >
-                      <FolderIcon /> Select Folder
+                      <FolderOpen size={16} /> Select Folder
                     </button>
                   </div>
                 </div>
@@ -710,7 +731,7 @@ function App() {
                       <div className="file-info-content">
                         <div className="file-icon">
                           {folderFiles.length > 0 ? (
-                            <FolderIcon />
+                            <FolderOpen size={24} />
                           ) : (
                             getFileExtension(file?.name || "")
                           )}
@@ -738,7 +759,7 @@ function App() {
                         onClick={sendFiles}
                         disabled={progress > 0 && progress < 100}
                       >
-                        <ShareIcon /> Send
+                        <Upload size={16} /> Send
                       </button>
                     </div>
 
@@ -830,28 +851,44 @@ function App() {
                 )}
 
                 {/* Received Files Display */}
-                {receivedFile && (
-                  <div className="file-item completed">
-                    <div className="file-header">
-                      <div className="file-info-content">
-                        <div className="file-icon">
-                          {getFileExtension(receivedFileName)}
-                        </div>
-                        <div className="file-details">
-                          <h4>{receivedFileName}</h4>
-                          <p>
-                            {formatFileSize(receivedFile.size)} • Received
-                            successfully
-                          </p>
+                {receivedFiles.length > 0 && (
+                  <div className="received-files-section">
+                    <div className="section-header">
+                      <h3>Received Files ({receivedFiles.length})</h3>
+                      {receivedFiles.length > 1 && (
+                        <button
+                          className="btn btn-secondary"
+                          onClick={downloadAllFiles}
+                        >
+                          <Download size={16} /> Download All
+                        </button>
+                      )}
+                    </div>
+                    {receivedFiles.map((file, index) => (
+                      <div key={index} className="file-item completed">
+                        <div className="file-header">
+                          <div className="file-info-content">
+                            <div className="file-icon">
+                              {getFileExtension(file.name)}
+                            </div>
+                            <div className="file-details">
+                              <h4>{file.name}</h4>
+                              <p>
+                                {formatFileSize(file.size)} • Received
+                                {file.receivedAt &&
+                                  ` at ${file.receivedAt.toLocaleTimeString()}`}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            className="btn btn-success"
+                            onClick={() => downloadFile(file)}
+                          >
+                            <Download size={16} /> Download
+                          </button>
                         </div>
                       </div>
-                      <button
-                        className="btn btn-success"
-                        onClick={downloadReceivedFile}
-                      >
-                        <DownloadIcon /> Download
-                      </button>
-                    </div>
+                    ))}
                   </div>
                 )}
 
@@ -859,13 +896,13 @@ function App() {
                 {(file ||
                   folderFiles.length > 0 ||
                   isReceiving ||
-                  receivedFile) && (
+                  receivedFiles.length > 0) && (
                   <div style={{ textAlign: "center", marginTop: "2rem" }}>
                     <button
                       className="btn btn-danger"
                       onClick={resetFileTransfer}
                     >
-                      Reset Transfer
+                      <RotateCcw size={16} /> Reset Transfer
                     </button>
                   </div>
                 )}
