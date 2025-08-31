@@ -8,8 +8,8 @@ export default defineConfig({
     host: true, // Expose to all network interfaces
     proxy: {
       "/socket.io": {
-        target: "http://localhost:3001",
-        ws: true,
+        target: "http://localhost:3001", // Change this to your backend server URL in development
+        ws: true, // Enable WebSocket proxying
         changeOrigin: true,
       },
     },
@@ -48,6 +48,7 @@ export default defineConfig({
       crypto: "crypto-browserify",
       buffer: "buffer",
       util: "util",
+      // Add any path aliases here if needed
     },
   },
   optimizeDeps: {

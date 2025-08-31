@@ -21,10 +21,12 @@ function App() {
   const receivedChunksRef = useRef([]);
   const fileSizeRef = useRef(0);
   const fileNameRef = useRef("");
+  const isReceivingRef = useRef(false);
 
   useEffect(() => {
     const socketUrl = import.meta.env.PROD
-      ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${
+      ? import.meta.env.VITE_BACKEND_URL ||
+        `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${
           window.location.host
         }`
       : "http://localhost:3001";
@@ -38,28 +40,23 @@ function App() {
     });
 
     newSocket.on("connect", () => {
-      console.log("Socket connected successfully");
       setStatus("Connected to server");
     });
 
     newSocket.on("disconnect", (reason) => {
-      console.log("Socket disconnected:", reason);
       setStatus("Disconnected from server");
       setIsConnected(false);
     });
 
     newSocket.on("reconnect", (attemptNumber) => {
-      console.log("Socket reconnected after", attemptNumber, "attempts");
       setStatus("Reconnected to server");
     });
 
     newSocket.on("reconnect_error", (error) => {
-      console.error("Socket reconnection error:", error);
       setStatus("Error reconnecting to server");
     });
 
     newSocket.on("reconnect_failed", () => {
-      console.error("Socket reconnection failed");
       setStatus("Failed to reconnect to server");
     });
 
@@ -74,31 +71,26 @@ function App() {
     if (!socket) return;
 
     socket.on("room-created", (id) => {
-      console.log("Room created:", id);
       setRoomId(id);
       setIsHost(true);
       setStatus("Room created! Share this ID with others: " + id);
     });
 
     socket.on("room-not-found", () => {
-      console.log("Room not found");
       setStatus("Room not found!");
     });
 
     socket.on("user-joined", (userId) => {
-      console.log("User joined:", userId);
       setStatus("User joined! Initiating connection...");
       createPeerConnection(true, userId);
     });
 
     socket.on("offer", (offer, userId) => {
-      console.log("Received offer from:", userId);
       setStatus("Received connection offer...");
       createPeerConnection(false, userId, offer);
     });
 
     socket.on("answer", (answer) => {
-      console.log("Received answer");
       if (peerConnectionRef.current) {
         peerConnectionRef.current
           .setRemoteDescription(new RTCSessionDescription(answer))
@@ -111,7 +103,6 @@ function App() {
     });
 
     socket.on("ice-candidate", (candidate) => {
-      console.log("Received ICE candidate");
       if (peerConnectionRef.current) {
         peerConnectionRef.current
           .addIceCandidate(new RTCIceCandidate(candidate))
@@ -124,7 +115,6 @@ function App() {
     });
 
     socket.on("host-disconnected", () => {
-      console.log("Host disconnected");
       setStatus("Host disconnected!");
       setIsConnected(false);
       setRoomId("");
@@ -181,9 +171,7 @@ function App() {
     const peerConnection = new RTCPeerConnection(configuration);
     peerConnectionRef.current = peerConnection;
 
-    // Set up data channel
     if (isInitiator) {
-      console.log("Creating data channel as initiator");
       const dataChannel = peerConnection.createDataChannel("fileTransfer", {
         ordered: true,
         maxRetransmits: 3,
@@ -191,25 +179,19 @@ function App() {
       setupDataChannel(dataChannel);
       dataChannelRef.current = dataChannel;
     } else {
-      console.log("Waiting for data channel as receiver");
       peerConnection.ondatachannel = (event) => {
-        console.log("Data channel received");
         setupDataChannel(event.channel);
         dataChannelRef.current = event.channel;
       };
     }
 
-    // ICE candidate handling
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("Sending ICE candidate");
         socket.emit("ice-candidate", event.candidate, roomId, userId);
       }
     };
 
-    // Connection state changes
     peerConnection.onconnectionstatechange = () => {
-      console.log("Connection state changed:", peerConnection.connectionState);
       if (peerConnection.connectionState === "connected") {
         setIsConnected(true);
         setStatus("Connected! You can now send files.");
@@ -224,18 +206,14 @@ function App() {
     };
 
     // ICE connection state changes
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log("ICE connection state:", peerConnection.iceConnectionState);
-    };
+    peerConnection.oniceconnectionstatechange = () => {};
 
     // If we're the initiator, create and send an offer
     if (isInitiator) {
-      console.log("Creating offer as initiator");
       peerConnection
         .createOffer()
         .then((offer) => peerConnection.setLocalDescription(offer))
         .then(() => {
-          console.log("Sending offer");
           socket.emit("offer", peerConnection.localDescription, roomId, userId);
         })
         .catch((error) => {
@@ -245,13 +223,11 @@ function App() {
     }
     // If we're the receiver and have an offer, set it and create an answer
     else if (offer) {
-      console.log("Setting remote description and creating answer");
       peerConnection
         .setRemoteDescription(new RTCSessionDescription(offer))
         .then(() => peerConnection.createAnswer())
         .then((answer) => peerConnection.setLocalDescription(answer))
         .then(() => {
-          console.log("Sending answer");
           socket.emit(
             "answer",
             peerConnection.localDescription,
@@ -296,6 +272,7 @@ function App() {
             // Start receiving a new file
             console.log("Received file metadata:", metadata);
             setIsReceiving(true);
+            isReceivingRef.current = true;
             setReceivedProgress(0);
             receivedChunksRef.current = [];
             fileSizeRef.current = metadata.size;
@@ -307,29 +284,23 @@ function App() {
         }
       } else if (data instanceof ArrayBuffer) {
         // If we're receiving a file
-        if (isReceiving) {
+        if (isReceivingRef.current) {
           receivedChunksRef.current.push(data);
           const totalChunks = Math.ceil(fileSizeRef.current / 16384);
           const currentProgress =
             (receivedChunksRef.current.length / totalChunks) * 100;
           setReceivedProgress(currentProgress);
-          console.log(
-            `Received chunk ${
-              receivedChunksRef.current.length
-            }/${totalChunks} (${currentProgress.toFixed(2)}%)`
-          );
 
           // If we've received all chunks, assemble the file
           if (receivedChunksRef.current.length >= totalChunks) {
-            console.log("All chunks received, assembling file...");
             try {
               const blob = new Blob(receivedChunksRef.current);
               setReceivedFile(blob);
               setReceivedFileName(fileNameRef.current);
               setIsReceiving(false);
+              isReceivingRef.current = false;
               setReceivedProgress(100);
               setStatus("File received successfully!");
-              console.log("File assembled successfully, size:", blob.size);
             } catch (error) {
               console.error("Error assembling file:", error);
               setStatus("Error assembling file!");
@@ -378,7 +349,6 @@ function App() {
       name: file.name,
       size: file.size,
     };
-    console.log("Sending file metadata:", metadata);
 
     try {
       dataChannelRef.current.send(JSON.stringify(metadata));
@@ -423,11 +393,6 @@ function App() {
             setProgress(currentProgress);
             setStatus(
               `Sending file: ${file.name} (${sentChunks}/${totalChunks} chunks)`
-            );
-            console.log(
-              `Sent chunk ${sentChunks}/${totalChunks} (${currentProgress.toFixed(
-                2
-              )}%)`
             );
 
             // Use a small delay to prevent overwhelming the data channel
@@ -517,7 +482,7 @@ function App() {
       ) : (
         <div className="room-info">
           <div className="room-id-container">
-            <h2>Room ID: {roomId}</h2>
+            <h2 style={{ color: "black" }}>Room ID: {roomId}</h2>
             <button className="copy-button" onClick={copyRoomId}>
               Copy Room ID
             </button>
